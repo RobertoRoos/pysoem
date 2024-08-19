@@ -88,12 +88,6 @@ cdef struct CdefMasterSettings:
     int* sdo_write_timeout
 
 def find_adapters():
-    """Create a list of available network adapters.
-
-    Returns:
-        list[Adapter]: Each element of the list has a name an desc attribute.
-
-    """
     cdef cpysoem.ec_adaptert* _ec_adapter = cpysoem.ec_find_adapters()
     Adapter = collections.namedtuple('Adapter', ['name', 'desc'])
     adapters = []
@@ -116,28 +110,10 @@ def open(ifname):
 
 
 def al_status_code_to_string(code):
-    """Look up text string that belongs to AL status code.
-    
-    Args:
-        arg1 (uint16): AL status code as defined in EtherCAT protocol.
-    
-    Returns:
-        str: A verbal description of status code
-    
-    """
     return cpysoem.ec_ALstatuscode2string(code).decode('utf8');
 
 
 class Master(CdefMaster):
-    """Representing a logical EtherCAT master device.
-
-    For each network interface you can have a Master instance.
-
-    Attributes:
-        slaves: Gets a list of the slaves found during config_init. The slave instances are of type :class:`CdefSlave`.
-        sdo_read_timeout: timeout for SDO read access for all slaves connected
-        sdo_write_timeout: timeout for SDO write access for all slaves connected
-    """
     pass
 
 
@@ -150,13 +126,6 @@ cdef enum:
     EC_IOMAPSIZE = 4096
 
 cdef class CdefMaster:
-    """Representing a logical EtherCAT master device.
-    
-    Please do not use this class directly, but the class Master instead.
-    Master is a typical Python object, with all it's benefits over
-    cdef classes. For example you can add new attributes dynamically.
-    """
-
     cdef cpysoem.ec_slavet        _ec_slave[EC_MAXSLAVE]
     cdef int                      _ec_slavecount
     cdef cpysoem.ec_groupt        _ec_group[EC_MAXGROUP]
@@ -215,24 +184,6 @@ cdef class CdefMaster:
         self._settings.sdo_write_timeout = &self.sdo_write_timeout
         
     def open(self, ifname, ifname_red=None):
-        """Initialize and open network interface.
-
-        On Linux the name of the interface is the same as usd by the system, e.g. ``eth0``, and as displayed by
-        ``ip addr``.
-
-        On Windows the names of the interfaces look like ``\\Device\\NPF_{1D123456-1E12-1C12-12F1-1234E123453B}``.
-        Finding the kind of name that SOEM expects is not straightforward. The most practical way is to use the
-        :func:`~find_adapters` method to find your available interfaces.
-
-        Args:
-            ifname(str): Interface name.
-            ifname_red(:obj:`str`, optional): Interface name of the second network interface card for redundancy.
-                Put to None if not used.
-        
-        Raises:
-            ConnectionError: When the specified interface dose not exist or
-                you have no permission to open the interface
-        """
         if ifname_red is None:
             ret_val = cpysoem.ecx_init(&self._ecx_contextt, ifname.encode('utf8'))
         else:
@@ -241,14 +192,6 @@ cdef class CdefMaster:
             raise ConnectionError('could not open interface {}'.format(ifname))
         
     def config_init(self, usetable=False):
-        """Enumerate and init all slaves.
-        
-        Args:
-            usetable (bool): True when using configtable to init slaves, False otherwise
-        
-        Returns:
-            int: Working counter of slave discover datagram = number of slaves found, -1 when no slave is connected
-        """
         self.slaves = []
         ret_val = cpysoem.ecx_config_init(&self._ecx_contextt, usetable)
         if ret_val > 0:
@@ -257,11 +200,6 @@ cdef class CdefMaster:
         return ret_val
         
     def config_map(self):
-        """Map all slaves PDOs in IO map.
-        
-        Returns:
-            int: IO map size (sum of all PDO in an out data)
-        """
         cdef _CallbackData cd
         # ecx_config_map_group returns the actual IO map size (not an error value), expect the value to be less than EC_IOMAPSIZE
         ret_val = cpysoem.ecx_config_map_group(&self._ecx_contextt, &self.io_map, 0)
@@ -278,11 +216,6 @@ cdef class CdefMaster:
         return ret_val
         
     def config_overlap_map(self):
-        """Map all slaves PDOs to overlapping IO map.
-        
-        Returns:
-            int: IO map size (sum of all PDO in an out data)
-        """
         cdef _CallbackData cd
         # ecx_config_map_group returns the actual IO map size (not an error value), expect the value to be less than EC_IOMAPSIZE
         ret_val = cpysoem.ecx_config_overlap_map_group(&self._ecx_contextt, &self.io_map, 0)
@@ -321,89 +254,28 @@ cdef class CdefMaster:
         return error_list
         
     def config_dc(self):
-        """Locate DC slaves, measure propagation delays.
-        
-        Returns:
-            bool: if slaves are found with DC
-        """
         return cpysoem.ecx_configdc(&self._ecx_contextt)
         
     def close(self):
-        """Close the network interface.
-        
-        """
         # ecx_close returns nothing
         cpysoem.ecx_close(&self._ecx_contextt)
         
     def read_state(self):
-        """Read all slaves states.
-        
-        Returns:
-            int: lowest state found
-        """
         return cpysoem.ecx_readstate(&self._ecx_contextt)
         
     def write_state(self):
-        """Write all slaves state.
-        
-        The function does not check if the actual state is changed.
-        
-        Returns:
-            int: Working counter or EC_NOFRAME
-        """
         return cpysoem.ecx_writestate(&self._ecx_contextt, 0)
         
     def state_check(self, int expected_state, timeout=50000):
-        """Check actual slave state.
-        
-        This is a blocking function.
-        To refresh the state of all slaves read_state() should be called
-        
-        Args:
-            expected_state (int): Requested state
-            timeout (int): Timeout value in us
-        
-        Returns:
-            int: Requested state, or found state after timeout
-        """
         return cpysoem.ecx_statecheck(&self._ecx_contextt, 0, expected_state, timeout)
         
     def send_processdata(self):
-        """Transmit processdata to slaves.
-        
-        Uses LRW, or LRD/LWR if LRW is not allowed (blockLRW).
-        Both the input and output processdata are transmitted.
-        The outputs with the actual data, the inputs have a placeholder.
-        The inputs are gathered with the receive processdata function.
-        In contrast to the base LRW function this function is non-blocking.
-        If the processdata does not fit in one datagram, multiple are used.
-        In order to recombine the slave response, a stack is used.
-        
-        Returns:
-            int: >0 if processdata is transmitted, might only by 0 if config map is not configured properly
-        """
         return cpysoem.ecx_send_processdata(&self._ecx_contextt)
 
     def send_overlap_processdata(self):
-        """Transmit overlap processdata to slaves.
-        
-        Returns:
-            int: >0 if processdata is transmitted, might only by 0 if config map is not configured properly
-        """
         return cpysoem.ecx_send_overlap_processdata(&self._ecx_contextt)
     
     def receive_processdata(self, timeout=2000):
-        """Receive processdata from slaves.
-
-        Second part from send_processdata().
-        Received datagrams are recombined with the processdata with help from the stack.
-        If a datagram contains input processdata it copies it to the processdata structure.
-
-        Args:
-            timeout (int): Timeout in us.
-        Returns
-            int: Working Counter
-        """
         return cpysoem.ecx_receive_processdata(&self._ecx_contextt, timeout)
     
     def _get_slave(self, int pos):
